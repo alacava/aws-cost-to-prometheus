@@ -31,8 +31,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
-          context: ./getFiles-node
-          file: ./getFiles-node/Dockerfile
+          context: .
+          file: ./Dockerfile
           push: true
           platforms: linux/amd64
           tags: antlac1/aws-cost-to-prometheus:latest
