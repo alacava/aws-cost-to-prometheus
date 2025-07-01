@@ -1,25 +1,18 @@
-FROM amazonlinux:2023
+FROM python:3.11-slim
 
 # Install required tools
-RUN dnf install -y \
-    python3 \
-    jq \
+RUN apt-get update && apt-get install -y \
     curl \
     unzip \
-    zip \
-    less \
-    groff \
-    tar \
-    && dnf clean all
+    jq \
+    ca-certificates \
+    && apt-get clean
 
 # Install AWS CLI v2
 RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" \
     && unzip awscliv2.zip \
     && ./aws/install \
     && rm -rf awscliv2.zip aws
-
-# Upgrade pip just in case
-RUN pip3 install --upgrade pip
 
 # Create app directory
 WORKDIR /app
