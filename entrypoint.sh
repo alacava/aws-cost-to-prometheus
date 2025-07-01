@@ -18,9 +18,11 @@ fi
 
 # Set date ranges
 t_today_date=$(date +%Y-%m-%d)
+t_today_plus1=$(date -d "$t_today_date +1 day" +%Y-%m-%d)
+t_yesterday_date=$(date -d "yesterday" +%Y-%m-%d)
+t_yesterday_plus1=$(date -d "$t_yesterday_date +1 day" +%Y-%m-%d)
 t_first_date=$(date +%Y-%m-01)
 t_last_date=$(date -d "$(date +%Y%m01) +1 month -1 day" +%Y-%m-%d)
-yesterday_date=$(date -d "yesterday" +%Y-%m-%d)
 
 echo "\U0001F4C5 Date range: $t_first_date → $t_last_date"
 
@@ -28,13 +30,9 @@ accounts=$(aws organizations list-accounts --query "Accounts[].Id" --output text
 total_cost=0
 declare -A SERVICE_TOTALS
 
-today_metrics=""
-yesterday_metrics=""
-
 for account_id in $accounts; do
   echo "\U0001F4E6 Processing account: $account_id"
 
-  # --- Monthly service cost ---
   aws ce get-cost-and-usage \
     --time-period Start=$t_first_date,End=$t_last_date \
     --granularity MONTHLY \
@@ -42,7 +40,6 @@ for account_id in $accounts; do
     --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
     --group-by Type=DIMENSION,Key=SERVICE > /tmp/service.json
 
-  # --- Monthly region cost ---
   aws ce get-cost-and-usage \
     --time-period Start=$t_first_date,End=$t_last_date \
     --granularity MONTHLY \
@@ -69,13 +66,17 @@ for account_id in $accounts; do
     total_cost=$(echo "$total_cost + $amount" | bc)
   done
 
-  # === DAILY COST: TODAY and YESTERDAY ===
   for day_label in today yesterday; do
-    [[ $day_label == "today" ]] && start_date=$t_today_date || start_date=$yesterday_date
+    if [[ $day_label == "today" ]]; then
+      start_date=$t_today_date
+      end_date=$t_today_plus1
+    else
+      start_date=$t_yesterday_date
+      end_date=$t_yesterday_plus1
+    fi
 
-    # Account-level daily total
     daily_amount=$(aws ce get-cost-and-usage \
-      --time-period Start=$start_date,End=$start_date \
+      --time-period Start=$start_date,End=$end_date \
       --granularity DAILY \
       --metrics "UnblendedCost" \
       --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
@@ -84,9 +85,8 @@ for account_id in $accounts; do
     metrics+="# TYPE aws_cost_daily_unblended_cost_account gauge\n"
     metrics+="aws_cost_daily_unblended_cost_account{account_id=\"$account_id\",day=\"$day_label\"} $daily_amount\n"
 
-    # Daily service breakdown
     aws ce get-cost-and-usage \
-      --time-period Start=$start_date,End=$start_date \
+      --time-period Start=$start_date,End=$end_date \
       --granularity DAILY \
       --metrics "UnblendedCost" \
       --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
@@ -105,15 +105,12 @@ for account_id in $accounts; do
   echo "✅ Metrics for $account_id pushed."
 done
 
-# --- Forecast Total ---
-echo "\U0001F4C8 Getting forecast for month..."
 forecast_amount=$(aws ce get-cost-forecast \
   --time-period Start=$t_today_date,End=$t_last_date \
   --granularity MONTHLY \
   --metric UNBLENDED_COST \
   | jq -r '.ForecastResultsByTime[0].MeanValue')
 
-# --- Push global totals ---
 global_metrics="# TYPE aws_cost_total_unblended_cost_all_accounts gauge\n"
 global_metrics+="aws_cost_total_unblended_cost_all_accounts $total_cost\n"
 
@@ -126,15 +123,14 @@ done
 global_metrics+="\n# TYPE aws_cost_forecast_unblended_cost_all_accounts gauge\n"
 global_metrics+="aws_cost_forecast_unblended_cost_all_accounts $forecast_amount\n"
 
-# Add today's and yesterday's total across all accounts
 daily_today=$(aws ce get-cost-and-usage \
-  --time-period Start=$t_today_date,End=$t_today_date \
+  --time-period Start=$t_today_date,End=$t_today_plus1 \
   --granularity DAILY \
   --metrics "UnblendedCost" \
   | jq -r '.ResultsByTime[0].Total.UnblendedCost.Amount')
 
 daily_yesterday=$(aws ce get-cost-and-usage \
-  --time-period Start=$yesterday_date,End=$yesterday_date \
+  --time-period Start=$t_yesterday_date,End=$t_yesterday_plus1 \
   --granularity DAILY \
   --metrics "UnblendedCost" \
   | jq -r '.ResultsByTime[0].Total.UnblendedCost.Amount')
@@ -143,6 +139,5 @@ global_metrics+="\n# TYPE aws_cost_daily_unblended_cost_all_accounts gauge\n"
 global_metrics+="aws_cost_daily_unblended_cost_all_accounts{day=\"today\"} $daily_today\n"
 global_metrics+="aws_cost_daily_unblended_cost_all_accounts{day=\"yesterday\"} $daily_yesterday\n"
 
-# Push to Pushgateway
 echo -e "$global_metrics" | curl -s --data-binary @- "$PUSHGATEWAY_URL/metrics/job/aws_cost_total"
 echo "✅ Global totals, forecast, and daily costs pushed"
