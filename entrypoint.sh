@@ -1,11 +1,14 @@
 #!/bin/bash
 set -e
 
-# Log environment info
-echo "🔐 AWS_PROFILE_NAME: $AWS_PROFILE_NAME"
-echo "📡 PUSHGATEWAY_URL: $PUSHGATEWAY_URL"
+# Optional debug
+echo "🔍 Loaded ENV:"
+echo "AWS_ACCESS_KEY_ID: $AWS_ACCESS_KEY_ID"
+echo "AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:0:4}****"
+echo "AWS_PROFILE_NAME: $AWS_PROFILE_NAME"
+echo "PUSHGATEWAY_URL: $PUSHGATEWAY_URL"
 
-# Use profile if provided
+# Use AWS_PROFILE if present
 if [[ -n "$AWS_PROFILE_NAME" ]]; then
   export AWS_PROFILE="$AWS_PROFILE_NAME"
   echo "🔐 Using AWS profile: $AWS_PROFILE"
@@ -13,51 +16,45 @@ else
   echo "🔐 Using AWS access keys from environment"
 fi
 
-# Set date range
 t_first_date=$(date +%Y-%m-01)
 t_last_date=$(date -d "`date +%Y%m01` +1 month -1 day" +%Y-%m-%d)
-echo "📆 Date range: $t_first_date → $t_last_date"
 
-# Get account list (ID + cleaned name)
-mapfile -t ACCOUNTS < <(aws organizations list-accounts \
-  --query "Accounts[].{Id:Id,Name:Name}" \
-  --output text)
+accounts=$(aws organizations list-accounts --query "Accounts[].Id" --output text)
 
-# Initialize metric strings
-region_metrics="# TYPE aws_cost_unblended_cost_region gauge\n"
-total_cost=0
+for account_id in $accounts; do
+  echo "📦 Processing account: $account_id"
 
-# Loop through accounts (each line has: ID<tab>Name)
-for ((i = 0; i < ${#ACCOUNTS[@]}; i += 2)); do
-  account_id="${ACCOUNTS[i]}"
-  raw_name="${ACCOUNTS[i+1]}"
-  account_name="${raw_name// /_}"
-
-  echo "📦 Processing account: $account_id ($account_name)"
-
-  # Query cost by region
   aws ce get-cost-and-usage \
     --time-period Start=$t_first_date,End=$t_last_date \
     --granularity MONTHLY \
     --metrics "UnblendedCost" \
-    --filter "{\"Dimensions\":{\"Key\":\"LINKED_ACCOUNT\",\"Values\":[\"$account_id\"]}}" \
+    --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
+    --group-by Type=DIMENSION,Key=SERVICE > /tmp/service.json
+
+  aws ce get-cost-and-usage \
+    --time-period Start=$t_first_date,End=$t_last_date \
+    --granularity MONTHLY \
+    --metrics "UnblendedCost" \
+    --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
     --group-by Type=DIMENSION,Key=REGION > /tmp/region.json
 
-  readarray -t regions < <(jq -c '.ResultsByTime[].Groups[]' /tmp/region.json)
-  for region_entry in "${regions[@]}"; do
-    region=$(echo "$region_entry" | jq -r '.Keys[0]')
-    amount=$(echo "$region_entry" | jq -r '.Metrics.UnblendedCost.Amount')
-    [[ "$amount" == "0" || -z "$amount" ]] && continue
-
-    region_metrics+="aws_cost_unblended_cost_region{account_id=\"$account_id\",account=\"$account_name\",region=\"$region\"} $amount\n"
-    total_cost=$(echo "$total_cost + $amount" | bc)
+  metrics=""
+  metrics+="# TYPE aws_cost_unblended_cost_service gauge\n"
+  readarray -t services < <(jq -c '.ResultsByTime[].Groups[]' /tmp/service.json)
+  for svc in "${services[@]}"; do
+    key=$(echo "$svc" | jq -r '.Keys[0]' | sed 's/ /_/g')
+    amount=$(echo "$svc" | jq -r '.Metrics.UnblendedCost.Amount')
+    metrics+="aws_cost_unblended_cost_service{account_id=\"$account_id\",service=\"$key\"} $amount\n"
   done
+
+  metrics+="# TYPE aws_cost_unblended_cost_region gauge\n"
+  readarray -t regions < <(jq -c '.ResultsByTime[].Groups[]' /tmp/region.json)
+  for reg in "${regions[@]}"; do
+    key=$(echo "$reg" | jq -r '.Keys[0]' | sed 's/ /_/g')
+    amount=$(echo "$reg" | jq -r '.Metrics.UnblendedCost.Amount')
+    metrics+="aws_cost_unblended_cost_region{account_id=\"$account_id\",region=\"$key\"} $amount\n"
+  done
+
+  echo -e "$metrics" | curl -s --data-binary @- "$PUSHGATEWAY_URL/metrics/job/aws_cost/account/$account_id"
+  echo "✅ Metrics for $account_id pushed."
 done
-
-# Add total cost metric
-region_metrics+="\n# TYPE aws_cost_total_unblended_cost_all_accounts gauge\n"
-region_metrics+="aws_cost_total_unblended_cost_all_accounts $total_cost\n"
-
-# Push to Pushgateway
-echo -e "$region_metrics" | curl -s --data-binary @- "$PUSHGATEWAY_URL/metrics/job/aws_cost"
-echo "✅ Pushed metrics to $PUSHGATEWAY_URL"
