@@ -9,12 +9,13 @@ This container pulls AWS Cost Explorer data (per account, region, and service) a
 2. Build the container:
 
 ```bash
-docker build -t aws-cost-push .
+docker build -t aws-cost-to-prometheus .
 ```
 
 ## Run
+# If you want to use your own image, change/remove the antlac1
 ```bash
 docker run --rm \
   --env-file ./config.env \
-  aws-cost-push
+  antlac1/aws-cost-to-prometheus
 ```
