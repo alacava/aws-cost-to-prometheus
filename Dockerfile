@@ -23,7 +23,7 @@ RUN pip3 install --upgrade pip
 
 # Create app directory
 WORKDIR /app
-COPY entrypoint.sh config.env ./
+COPY entrypoint.sh config.env.example ./
 RUN chmod +x entrypoint.sh
 
 CMD ["./entrypoint.sh"]
