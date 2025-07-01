@@ -1,8 +1,6 @@
 #!/bin/bash
 set -e
 
-source /app/config.env
-
 # Use profile if defined, otherwise fall back to access keys
 if [[ -n "$AWS_PROFILE_NAME" ]]; then
   export AWS_PROFILE="$AWS_PROFILE_NAME"
