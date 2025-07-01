@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     unzip \
     jq \
+    bc \
     ca-certificates \
     && apt-get clean
 
