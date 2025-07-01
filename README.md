@@ -10,10 +10,11 @@ This container pulls AWS Cost Explorer data (per account, region, and service) a
 
 ```bash
 docker build -t aws-cost-push .
+```
 
-```bash
 ## Run
-
+```bash
 docker run --rm \
   --env-file ./config.env \
   aws-cost-push
+```
