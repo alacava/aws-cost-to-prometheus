@@ -2,7 +2,7 @@
 set -e
 
 # Optional debug
-echo "\U0001F50D Loaded ENV:"
+echo "🔍 Loaded ENV:"
 echo "AWS_ACCESS_KEY_ID: $AWS_ACCESS_KEY_ID"
 echo "AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:0:4}****"
 echo "AWS_PROFILE_NAME: $AWS_PROFILE_NAME"
@@ -11,9 +11,9 @@ echo "PUSHGATEWAY_URL: $PUSHGATEWAY_URL"
 # Use AWS_PROFILE if present
 if [[ -n "$AWS_PROFILE_NAME" ]]; then
   export AWS_PROFILE="$AWS_PROFILE_NAME"
-  echo "\U0001F510 Using AWS profile: $AWS_PROFILE"
+  echo "🔐 Using AWS profile: $AWS_PROFILE"
 else
-  echo "\U0001F510 Using AWS access keys from environment"
+  echo "🔐 Using AWS access keys from environment"
 fi
 
 # Set date ranges
@@ -24,14 +24,14 @@ t_yesterday_plus1=$(date -d "$t_yesterday_date +1 day" +%Y-%m-%d)
 t_first_date=$(date +%Y-%m-01)
 t_last_date=$(date -d "$(date +%Y%m01) +1 month -1 day" +%Y-%m-%d)
 
-echo "\U0001F4C5 Date range: $t_first_date → $t_last_date"
+echo "📅 Date range: $t_first_date → $t_last_date"
 
 accounts=$(aws organizations list-accounts --query "Accounts[].Id" --output text)
 total_cost=0
 declare -A SERVICE_TOTALS
 
 for account_id in $accounts; do
-  echo "\U0001F4E6 Processing account: $account_id"
+  echo "📦 Processing account: $account_id"
 
   aws ce get-cost-and-usage \
     --time-period Start=$t_first_date,End=$t_last_date \
@@ -92,11 +92,11 @@ for account_id in $accounts; do
       --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
       --group-by Type=DIMENSION,Key=SERVICE > /tmp/daily_service.json
 
+    metrics+="# TYPE aws_cost_daily_unblended_cost_account_service gauge\n"
     readarray -t daily_services < <(jq -c '.ResultsByTime[].Groups[]' /tmp/daily_service.json)
     for svc in "${daily_services[@]}"; do
       service_key=$(echo "$svc" | jq -r '.Keys[0]' | sed 's/ /_/g')
       svc_amount=$(echo "$svc" | jq -r '.Metrics.UnblendedCost.Amount')
-      metrics+="# TYPE aws_cost_daily_unblended_cost_account_service gauge\n"
       metrics+="aws_cost_daily_unblended_cost_account_service{account_id=\"$account_id\",service=\"$service_key\",day=\"$day_label\"} $svc_amount\n"
     done
   done
