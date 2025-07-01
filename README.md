@@ -10,6 +10,7 @@ The following metrics are pushed to [Prometheus Pushgateway](https://prometheus.
 |--------------------------------------------------|----------------------------------------|--------------------------------------------------|
 | `aws_cost_unblended_cost_service`               | `account_id`, `service`               | Monthly unblended cost by AWS service per account |
 | `aws_cost_unblended_cost_region`                | `account_id`, `region`                | Monthly unblended cost by AWS region per account |
+| `aws_cost_total_unblended_cost_by_account`      | `account_id`,                         | Monthly unblended cost by AWS account            |
 | `aws_cost_daily_unblended_cost_account`         | `account_id`, `day`                   | Daily cost per account (`today`, `yesterday`)    |
 | `aws_cost_daily_unblended_cost_account_service` | `account_id`, `service`, `day`        | Daily cost by service per account                |
 | `aws_cost_total_unblended_cost_all_accounts`    | *(none)*                              | Total monthly cost across all AWS accounts       |

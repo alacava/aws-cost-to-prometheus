@@ -29,6 +29,7 @@ echo "📅 Date range: $t_first_date → $t_last_date"
 accounts=$(aws organizations list-accounts --query "Accounts[].Id" --output text)
 total_cost=0
 declare -A SERVICE_TOTALS
+declare -A ACCOUNT_TOTALS
 
 for account_id in $accounts; do
   echo "📦 Processing account: $account_id"
@@ -37,14 +38,14 @@ for account_id in $accounts; do
     --time-period Start=$t_first_date,End=$t_last_date \
     --granularity MONTHLY \
     --metrics "UnblendedCost" \
-    --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
+    --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'$account_id'"]}}' \
     --group-by Type=DIMENSION,Key=SERVICE > /tmp/service.json
 
   aws ce get-cost-and-usage \
     --time-period Start=$t_first_date,End=$t_last_date \
     --granularity MONTHLY \
     --metrics "UnblendedCost" \
-    --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
+    --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'$account_id'"]}}' \
     --group-by Type=DIMENSION,Key=REGION > /tmp/region.json
 
   metrics="# TYPE aws_cost_unblended_cost_service gauge\n"
@@ -64,6 +65,8 @@ for account_id in $accounts; do
     amount=$(echo "$reg" | jq -r '.Metrics.UnblendedCost.Amount')
     metrics+="aws_cost_unblended_cost_region{account_id=\"$account_id\",region=\"$key\"} $amount\n"
     total_cost=$(echo "$total_cost + $amount" | bc)
+    current_account_total=${ACCOUNT_TOTALS["$account_id"]:=0}
+    ACCOUNT_TOTALS["$account_id"]=$(echo "$current_account_total + $amount" | bc)
   done
 
   metrics+="# TYPE aws_cost_daily_unblended_cost_account gauge\n"
@@ -81,7 +84,7 @@ for account_id in $accounts; do
       --time-period Start=$start_date,End=$end_date \
       --granularity DAILY \
       --metrics "UnblendedCost" \
-      --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
+      --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'$account_id'"]}}' \
       | jq -r '.ResultsByTime[0].Total.UnblendedCost.Amount')
 
     metrics+="aws_cost_daily_unblended_cost_account{account_id=\"$account_id\",day=\"$day_label\"} $daily_amount\n"
@@ -90,7 +93,7 @@ for account_id in $accounts; do
       --time-period Start=$start_date,End=$end_date \
       --granularity DAILY \
       --metrics "UnblendedCost" \
-      --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
+      --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'$account_id'"]}}' \
       --group-by Type=DIMENSION,Key=SERVICE > /tmp/daily_service.json
 
     readarray -t daily_services < <(jq -c '.ResultsByTime[].Groups[]' /tmp/daily_service.json)
@@ -118,6 +121,12 @@ global_metrics+="\n# TYPE aws_cost_total_unblended_cost_by_service gauge\n"
 for service in "${!SERVICE_TOTALS[@]}"; do
   amt=${SERVICE_TOTALS[$service]}
   global_metrics+="aws_cost_total_unblended_cost_by_service{service=\"$service\"} $amt\n"
+done
+
+global_metrics+="\n# TYPE aws_cost_total_unblended_cost_by_account gauge\n"
+for acct in "${!ACCOUNT_TOTALS[@]}"; do
+  total=${ACCOUNT_TOTALS[$acct]}
+  global_metrics+="aws_cost_total_unblended_cost_by_account{account_id=\"$acct\"} $total\n"
 done
 
 global_metrics+="\n# TYPE aws_cost_forecast_unblended_cost_all_accounts gauge\n"
