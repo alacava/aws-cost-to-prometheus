@@ -16,8 +16,11 @@ else
   echo "🔐 Using AWS access keys from environment"
 fi
 
+t_today_date=$(date +%Y-%m-%d)
 t_first_date=$(date +%Y-%m-01)
 t_last_date=$(date -d "`date +%Y%m01` +1 month -1 day" +%Y-%m-%d)
+
+echo "📆 Date range: $t_first_date → $t_last_date"
 
 accounts=$(aws organizations list-accounts --query "Accounts[].Id" --output text)
 total_cost=0
@@ -47,8 +50,6 @@ for account_id in $accounts; do
     key=$(echo "$svc" | jq -r '.Keys[0]' | sed 's/ /_/g')
     amount=$(echo "$svc" | jq -r '.Metrics.UnblendedCost.Amount')
     metrics+="aws_cost_unblended_cost_service{account_id=\"$account_id\",service=\"$key\"} $amount\n"
-
-    # Accumulate for global service total
     current=${SERVICE_TOTALS["$key"]:="0"}
     SERVICE_TOTALS["$key"]=$(echo "$current + $amount" | bc)
   done
@@ -66,16 +67,28 @@ for account_id in $accounts; do
   echo "✅ Metrics for $account_id pushed."
 done
 
-# Push global total
+# Forecast total (global)
+echo "📈 Fetching forecast for current month..."
+
+forecast_amount=$(aws ce get-cost-forecast \
+  --time-period Start=$t_today_date,End=$t_last_date \
+  --granularity MONTHLY \
+  --metric UNBLENDED_COST \
+  | jq -r '.ForecastResultsByTime[0].MeanValue')
+
+# Build global metrics
 global_metrics="# TYPE aws_cost_total_unblended_cost_all_accounts gauge\n"
 global_metrics+="aws_cost_total_unblended_cost_all_accounts $total_cost\n"
 
-# Push total by service
 global_metrics+="\n# TYPE aws_cost_total_unblended_cost_by_service gauge\n"
 for service in "${!SERVICE_TOTALS[@]}"; do
   amt=${SERVICE_TOTALS[$service]}
   global_metrics+="aws_cost_total_unblended_cost_by_service{service=\"$service\"} $amt\n"
 done
 
+global_metrics+="\n# TYPE aws_cost_forecast_unblended_cost_all_accounts gauge\n"
+global_metrics+="aws_cost_forecast_unblended_cost_all_accounts $forecast_amount\n"
+
+# Push totals + forecast
 echo -e "$global_metrics" | curl -s --data-binary @- "$PUSHGATEWAY_URL/metrics/job/aws_cost_total"
-echo "✅ Global total and by-service metrics pushed"
+echo "✅ Global totals + forecast pushed: $forecast_amount"
