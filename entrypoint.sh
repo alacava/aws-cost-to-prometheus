@@ -2,7 +2,7 @@
 set -e
 
 # Optional debug
-echo "🔍 Loaded ENV:"
+echo "\U0001F50D Loaded ENV:"
 echo "AWS_ACCESS_KEY_ID: $AWS_ACCESS_KEY_ID"
 echo "AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:0:4}****"
 echo "AWS_PROFILE_NAME: $AWS_PROFILE_NAME"
@@ -11,24 +11,30 @@ echo "PUSHGATEWAY_URL: $PUSHGATEWAY_URL"
 # Use AWS_PROFILE if present
 if [[ -n "$AWS_PROFILE_NAME" ]]; then
   export AWS_PROFILE="$AWS_PROFILE_NAME"
-  echo "🔐 Using AWS profile: $AWS_PROFILE"
+  echo "\U0001F510 Using AWS profile: $AWS_PROFILE"
 else
-  echo "🔐 Using AWS access keys from environment"
+  echo "\U0001F510 Using AWS access keys from environment"
 fi
 
+# Set date ranges
 t_today_date=$(date +%Y-%m-%d)
 t_first_date=$(date +%Y-%m-01)
-t_last_date=$(date -d "`date +%Y%m01` +1 month -1 day" +%Y-%m-%d)
+t_last_date=$(date -d "$(date +%Y%m01) +1 month -1 day" +%Y-%m-%d)
+yesterday_date=$(date -d "yesterday" +%Y-%m-%d)
 
-echo "📆 Date range: $t_first_date → $t_last_date"
+echo "\U0001F4C5 Date range: $t_first_date → $t_last_date"
 
 accounts=$(aws organizations list-accounts --query "Accounts[].Id" --output text)
 total_cost=0
 declare -A SERVICE_TOTALS
 
-for account_id in $accounts; do
-  echo "📦 Processing account: $account_id"
+today_metrics=""
+yesterday_metrics=""
 
+for account_id in $accounts; do
+  echo "\U0001F4E6 Processing account: $account_id"
+
+  # --- Monthly service cost ---
   aws ce get-cost-and-usage \
     --time-period Start=$t_first_date,End=$t_last_date \
     --granularity MONTHLY \
@@ -36,6 +42,7 @@ for account_id in $accounts; do
     --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
     --group-by Type=DIMENSION,Key=SERVICE > /tmp/service.json
 
+  # --- Monthly region cost ---
   aws ce get-cost-and-usage \
     --time-period Start=$t_first_date,End=$t_last_date \
     --granularity MONTHLY \
@@ -43,14 +50,13 @@ for account_id in $accounts; do
     --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
     --group-by Type=DIMENSION,Key=REGION > /tmp/region.json
 
-  metrics=""
-  metrics+="# TYPE aws_cost_unblended_cost_service gauge\n"
+  metrics="# TYPE aws_cost_unblended_cost_service gauge\n"
   readarray -t services < <(jq -c '.ResultsByTime[].Groups[]' /tmp/service.json)
   for svc in "${services[@]}"; do
     key=$(echo "$svc" | jq -r '.Keys[0]' | sed 's/ /_/g')
     amount=$(echo "$svc" | jq -r '.Metrics.UnblendedCost.Amount')
     metrics+="aws_cost_unblended_cost_service{account_id=\"$account_id\",service=\"$key\"} $amount\n"
-    current=${SERVICE_TOTALS["$key"]:="0"}
+    current=${SERVICE_TOTALS["$key"]:=0}
     SERVICE_TOTALS["$key"]=$(echo "$current + $amount" | bc)
   done
 
@@ -63,20 +69,51 @@ for account_id in $accounts; do
     total_cost=$(echo "$total_cost + $amount" | bc)
   done
 
+  # === DAILY COST: TODAY and YESTERDAY ===
+  for day_label in today yesterday; do
+    [[ $day_label == "today" ]] && start_date=$t_today_date || start_date=$yesterday_date
+
+    # Account-level daily total
+    daily_amount=$(aws ce get-cost-and-usage \
+      --time-period Start=$start_date,End=$start_date \
+      --granularity DAILY \
+      --metrics "UnblendedCost" \
+      --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
+      | jq -r '.ResultsByTime[0].Total.UnblendedCost.Amount')
+
+    metrics+="# TYPE aws_cost_daily_unblended_cost_account gauge\n"
+    metrics+="aws_cost_daily_unblended_cost_account{account_id=\"$account_id\",day=\"$day_label\"} $daily_amount\n"
+
+    # Daily service breakdown
+    aws ce get-cost-and-usage \
+      --time-period Start=$start_date,End=$start_date \
+      --granularity DAILY \
+      --metrics "UnblendedCost" \
+      --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
+      --group-by Type=DIMENSION,Key=SERVICE > /tmp/daily_service.json
+
+    readarray -t daily_services < <(jq -c '.ResultsByTime[].Groups[]' /tmp/daily_service.json)
+    for svc in "${daily_services[@]}"; do
+      service_key=$(echo "$svc" | jq -r '.Keys[0]' | sed 's/ /_/g')
+      svc_amount=$(echo "$svc" | jq -r '.Metrics.UnblendedCost.Amount')
+      metrics+="# TYPE aws_cost_daily_unblended_cost_account_service gauge\n"
+      metrics+="aws_cost_daily_unblended_cost_account_service{account_id=\"$account_id\",service=\"$service_key\",day=\"$day_label\"} $svc_amount\n"
+    done
+  done
+
   echo -e "$metrics" | curl -s --data-binary @- "$PUSHGATEWAY_URL/metrics/job/aws_cost/account/$account_id"
   echo "✅ Metrics for $account_id pushed."
 done
 
-# Forecast total (global)
-echo "📈 Fetching forecast for current month..."
-
+# --- Forecast Total ---
+echo "\U0001F4C8 Getting forecast for month..."
 forecast_amount=$(aws ce get-cost-forecast \
   --time-period Start=$t_today_date,End=$t_last_date \
   --granularity MONTHLY \
   --metric UNBLENDED_COST \
   | jq -r '.ForecastResultsByTime[0].MeanValue')
 
-# Build global metrics
+# --- Push global totals ---
 global_metrics="# TYPE aws_cost_total_unblended_cost_all_accounts gauge\n"
 global_metrics+="aws_cost_total_unblended_cost_all_accounts $total_cost\n"
 
@@ -89,6 +126,23 @@ done
 global_metrics+="\n# TYPE aws_cost_forecast_unblended_cost_all_accounts gauge\n"
 global_metrics+="aws_cost_forecast_unblended_cost_all_accounts $forecast_amount\n"
 
-# Push totals + forecast
+# Add today's and yesterday's total across all accounts
+daily_today=$(aws ce get-cost-and-usage \
+  --time-period Start=$t_today_date,End=$t_today_date \
+  --granularity DAILY \
+  --metrics "UnblendedCost" \
+  | jq -r '.ResultsByTime[0].Total.UnblendedCost.Amount')
+
+daily_yesterday=$(aws ce get-cost-and-usage \
+  --time-period Start=$yesterday_date,End=$yesterday_date \
+  --granularity DAILY \
+  --metrics "UnblendedCost" \
+  | jq -r '.ResultsByTime[0].Total.UnblendedCost.Amount')
+
+global_metrics+="\n# TYPE aws_cost_daily_unblended_cost_all_accounts gauge\n"
+global_metrics+="aws_cost_daily_unblended_cost_all_accounts{day=\"today\"} $daily_today\n"
+global_metrics+="aws_cost_daily_unblended_cost_all_accounts{day=\"yesterday\"} $daily_yesterday\n"
+
+# Push to Pushgateway
 echo -e "$global_metrics" | curl -s --data-binary @- "$PUSHGATEWAY_URL/metrics/job/aws_cost_total"
-echo "✅ Global totals + forecast pushed: $forecast_amount"
+echo "✅ Global totals, forecast, and daily costs pushed"
