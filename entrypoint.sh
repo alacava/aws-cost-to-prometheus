@@ -66,6 +66,8 @@ for account_id in $accounts; do
     total_cost=$(echo "$total_cost + $amount" | bc)
   done
 
+  metrics+="# TYPE aws_cost_daily_unblended_cost_account gauge\n"
+  metrics+="# TYPE aws_cost_daily_unblended_cost_account_service gauge\n"
   for day_label in today yesterday; do
     if [[ $day_label == "today" ]]; then
       start_date=$t_today_date
@@ -82,7 +84,6 @@ for account_id in $accounts; do
       --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
       | jq -r '.ResultsByTime[0].Total.UnblendedCost.Amount')
 
-    metrics+="# TYPE aws_cost_daily_unblended_cost_account gauge\n"
     metrics+="aws_cost_daily_unblended_cost_account{account_id=\"$account_id\",day=\"$day_label\"} $daily_amount\n"
 
     aws ce get-cost-and-usage \
@@ -92,7 +93,6 @@ for account_id in $accounts; do
       --filter '{"Dimensions":{"Key":"LINKED_ACCOUNT","Values":["'"$account_id"'"]}}' \
       --group-by Type=DIMENSION,Key=SERVICE > /tmp/daily_service.json
 
-    metrics+="# TYPE aws_cost_daily_unblended_cost_account_service gauge\n"
     readarray -t daily_services < <(jq -c '.ResultsByTime[].Groups[]' /tmp/daily_service.json)
     for svc in "${daily_services[@]}"; do
       service_key=$(echo "$svc" | jq -r '.Keys[0]' | sed 's/ /_/g')
