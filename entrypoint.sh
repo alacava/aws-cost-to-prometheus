@@ -1,10 +1,17 @@
 #!/bin/bash
 set -e
 
-# Use profile if defined, otherwise fall back to access keys
+# Optional debug
+echo "🔍 Loaded ENV:"
+echo "AWS_ACCESS_KEY_ID: $AWS_ACCESS_KEY_ID"
+echo "AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:0:4}****"
+echo "AWS_PROFILE_NAME: $AWS_PROFILE_NAME"
+echo "PUSHGATEWAY_URL: $PUSHGATEWAY_URL"
+
+# Use AWS_PROFILE if present
 if [[ -n "$AWS_PROFILE_NAME" ]]; then
   export AWS_PROFILE="$AWS_PROFILE_NAME"
-  echo "🔐 Using AWS profile: $AWS_PROFILE_NAME"
+  echo "🔐 Using AWS profile: $AWS_PROFILE"
 else
   echo "🔐 Using AWS access keys from environment"
 fi
