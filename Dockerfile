@@ -1,4 +1,4 @@
-FROM amazonlinux:2
+FROM amazonlinux:2023
 
 RUN yum install -y \
     python3 \
