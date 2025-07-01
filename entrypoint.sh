@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-
+date
 # Optional debug
 echo "🔍 Loaded ENV:"
 echo "AWS_ACCESS_KEY_ID: $AWS_ACCESS_KEY_ID"
