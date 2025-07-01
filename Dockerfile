@@ -1,7 +1,7 @@
 FROM amazonlinux:2023
 
 # Install required tools
-RUN yum install -y \
+RUN dnf install -y \
     python3 \
     jq \
     curl \
@@ -10,7 +10,7 @@ RUN yum install -y \
     less \
     groff \
     tar \
-    && yum clean all
+    && dnf clean all
 
 # Install AWS CLI v2
 RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" \
